@@ -59,12 +59,18 @@ Dilengkapi dengan **Bot Notifikasi Telegram Pribadi** & **Menu Perintah Interakt
 
 ## 🚀 Panduan Setup & Instalasi
 
-### 1. Prasyarat System
-- Python `3.10+`
-- Node.js `18+`
+### 1. Prasyarat System & Virtual Environment
+- Python `3.10+` & Node.js `18+`
 - PM2 (`npm install -g pm2`)
 
-### 2. Clone Repositori & Install Dependensi
+Buat & aktifkan Virtual Environment Python:
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-full
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 2. Install Dependensi
 
 ```bash
 # Install Python Dependencies
@@ -121,6 +127,24 @@ DRY_RUN=true                                      # Set false untuk Live Mainnet
 
 ---
 
+## 🔑 Otentikasi Telegram Pertama Kali (First-Time Login)
+
+Sebelum menjalankan bot via PM2, Anda **wajib melakukan otentikasi login Telegram 1x secara manual** di terminal untuk membuat file kunci sesi `alert_listener_session.session`:
+
+1. **Jalankan listener secara manual di terminal**:
+   ```bash
+   source venv/bin/activate
+   python listener.py
+   ```
+2. **Masukkan Nomor HP & Kode OTP**:
+   - Ketik nomor HP akun Telegram Anda (format internasional, misal `+62812345678`).
+   - Masukkan kode OTP yang dikirimkan oleh Telegram ke aplikasi Telegram Anda.
+3. **Tutup Script**:
+   - Setelah muncul log `Memulai Listener Telegram...`, file `alert_listener_session.session` otomatis tercipta.
+   - Tekan `Ctrl + C` untuk keluar. Otentikasi ini hanya dilakukan **1x saja**.
+
+---
+
 ## 🎮 Perintah Interaktif Telegram
 
 Setelah bot berjalan, Anda bisa mengirimkan perintah ini langsung ke **Bot Notifikasi Telegram Anda**:
@@ -139,14 +163,14 @@ Setelah bot berjalan, Anda bisa mengirimkan perintah ini langsung ke **Bot Notif
 
 ### Cara A: Production Mode 24/7 via PM2 (Rekomendasi)
 
+Setelah langkah otentikasi Telegram 1x di atas selesai:
+
 ```bash
-# Menjalankan kedua service sekaligus
+# Menjalankan kedua service sekaligus (PM2 otomatis menggunakan ./venv/bin/python)
 pm2 start ecosystem.config.js
 
-# Cek status
+# Cek status & log
 pm2 status
-
-# Cek log real-time
 pm2 logs
 
 # Simpan proses agar otomatis nyala saat server restart
@@ -162,6 +186,7 @@ pm2 startup
   ```
 * **Terminal 2 (Python Telegram Alert Listener)**:
   ```bash
+  source venv/bin/activate
   python listener.py
   ```
 
@@ -178,7 +203,7 @@ pm2 startup
 │   ├── dbService.js         # Persistence database JSON lokal (positions.json)
 │   ├── telegramNotifier.js  # Format HTML notification sender ke Telegram Notifier
 │   └── botCommandHandler.js # Interactive Telegram command handler (/status, /active, etc)
-├── ecosystem.config.js      # Konfigurasi PM2 process manager
+├── ecosystem.config.js      # Konfigurasi PM2 process manager (Auto-detect venv)
 ├── package.json             # Dependensi Node.js
 ├── requirements.txt         # Dependensi Python
 ├── .env.example             # Template konfigurasi variabel lingkungan
