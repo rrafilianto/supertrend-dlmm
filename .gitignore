@@ -1,0 +1,41 @@
+# --- ENVIRONMENT & SENSITIVE CREDENTIALS ---
+.env
+*.env
+!.env.example
+
+# --- TELEGRAM SESSIONS & KEYS ---
+*.session
+*.session-journal
+alert_listener_session.session
+
+# --- NODE.JS DEPENDENCIES & LOGS ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+logs/
+*.log
+
+# --- PYTHON CACHE & VIRTUAL ENVS ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+ENV/
+
+# --- LOCAL DATABASE & POSITION STATE ---
+positions.json
+
+# --- OS & IDE FILES ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/
