@@ -1,9 +1,16 @@
+const fs = require('fs');
+const path = require('path');
+
+// Deteksi otomatis jika virtual environment (venv) tersedia
+const venvPython = path.join(__dirname, 'venv', 'bin', 'python');
+const pythonInterpreter = fs.existsSync(venvPython) ? venvPython : 'python3';
+
 module.exports = {
   apps: [
     {
       name: "telegram-listener",
       script: "listener.py",
-      interpreter: "python3",
+      interpreter: pythonInterpreter,
       watch: false,
       env: {
         NODE_ENV: "production"
