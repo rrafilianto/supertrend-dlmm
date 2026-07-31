@@ -37,8 +37,11 @@ if not TARGET_BOT:
 # Format target_bot (apabila berupa angka ID, ubah ke integer)
 target_filter_chat = int(TARGET_BOT) if TARGET_BOT.lstrip("-").isdigit() else TARGET_BOT.lstrip("@")
 
-# Regex pattern untuk mencocokkan Solana Mint Address (Base58 32-44 karakter)
+# Regex pattern untuk Solana Mint Address (Base58 32-44 karakter)
 SOLANA_CA_REGEX = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
+
+# Regex pattern untuk Pair Name (misal: LUNA-SOL, Fauci-SOL, ChooChoo-SOL)
+PAIR_NAME_REGEX = re.compile(r"\b([A-Za-z0-9_]+-SOL)\b", re.IGNORECASE)
 
 # Inisialisasi Pyrogram Client
 app = Client(
@@ -48,29 +51,35 @@ app = Client(
 )
 
 
-def extract_mint_address(text: str) -> str | None:
+def extract_target_query(text: str) -> str | None:
     """
-    Ekstrak Solana Contract Address (Base58) dari teks alert Telegram.
-    Akan mengabaikan kata-kata umum dan fokus pada string CA valid (biasanya diakhiri 'pump' atau 43-44 char).
+    Ekstrak Solana Contract Address (CA) atau Pair Name (misal LUNA-SOL) dari teks alert.
     """
     if not text:
         return None
 
-    matches = SOLANA_CA_REGEX.findall(text)
-    for match in matches:
+    # 1. Coba ekstrak Solana Mint Address (Base58) jika ada
+    ca_matches = SOLANA_CA_REGEX.findall(text)
+    for match in ca_matches:
         if len(match) >= 32 and len(match) <= 44:
             if match in ["Discovery", "Supertrend", "Meteora", "Bullish", "Bearish"]:
                 continue
             return match
+
+    # 2. Jika tidak ada CA polos, ekstrak Pair Name (misal: LUNA-SOL atau Fauci-SOL)
+    pair_matches = PAIR_NAME_REGEX.findall(text)
+    if pair_matches:
+        return pair_matches[0].upper()
+
     return None
 
 
-def forward_mint_to_manager(mint_ca: str, raw_text: str):
+def forward_signal_to_manager(query: str, raw_text: str):
     """
     Kirimkan HTTP POST request ke Node.js Position Manager (localhost:3000/open-position).
     """
     payload = json.dumps({
-        "mint": mint_ca,
+        "query": query,
         "rawAlert": raw_text,
         "timestamp": datetime.now().isoformat()
     }).encode("utf-8")
@@ -85,9 +94,9 @@ def forward_mint_to_manager(mint_ca: str, raw_text: str):
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             res_data = json.loads(resp.read().decode())
-            logger.info(f"✅ [SUCCESS] Sent CA {mint_ca} to Position Manager: {res_data}")
+            logger.info(f"✅ [SUCCESS] Sent Signal `{query}` to Position Manager: {res_data}")
     except Exception as e:
-        logger.error(f"❌ [ERROR] Gagal mengirim CA {mint_ca} ke Position Manager ({MANAGER_URL}): {e}")
+        logger.error(f"❌ [ERROR] Gagal mengirim Signal `{query}` ke Position Manager ({MANAGER_URL}): {e}")
 
 
 @app.on_message(filters.chat(target_filter_chat))
@@ -104,12 +113,12 @@ async def handle_target_alert(client: Client, message):
     print(text)
     print("=" * 60)
 
-    mint_ca = extract_mint_address(text)
-    if mint_ca:
-        logger.info(f"🎯 [MINT EXTACTED] Found Solana Token CA: {mint_ca}")
-        forward_mint_to_manager(mint_ca, text)
+    target_query = extract_target_query(text)
+    if target_query:
+        logger.info(f"🎯 [SIGNAL EXTACTED] Target Query: {target_query}")
+        forward_signal_to_manager(target_query, text)
     else:
-        logger.warning("⚠️ Tidak ditemukan Solana Mint Address pada pesan alert ini.")
+        logger.warning("⚠️ Tidak ditemukan Solana Mint CA maupun Pair Name pada pesan alert ini.")
 
 
 if __name__ == "__main__":

@@ -22,18 +22,19 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Endpoint untuk Menerima Signal Open Position dari Python Telegram Listener
+// Endpoint untuk Menerima Signal Open Position dari Python Telegram Listener (Mendukung Mint CA atau Pair Name)
 app.post('/open-position', async (req, res) => {
   try {
-    const { mint, rawAlert } = req.body;
+    const { query, mint, rawAlert } = req.body;
+    const targetSignal = query || mint;
 
-    if (!mint) {
-      return res.status(400).json({ error: 'Field `mint` (Solana Contract Address) wajib diisi.' });
+    if (!targetSignal) {
+      return res.status(400).json({ error: 'Field `query` atau `mint` (Solana CA / Pair Name) wajib diisi.' });
     }
 
     // CEK STATUS PAUSE DARI TELEGRAM COMMAND (/stopbot)
     if (botCommandHandler.isBotPaused()) {
-      console.log(`⏸️ [PAUSED IGNORED] Bot sedang di-pause via Telegram command. Mengabaikan alert mint: ${mint}`);
+      console.log(`⏸️ [PAUSED IGNORED] Bot sedang di-pause via Telegram command. Mengabaikan alert signal: ${targetSignal}`);
       return res.status(200).json({
         success: true,
         message: 'Bot sedang di-pause via Telegram command. Alert diabaikan.',
@@ -42,17 +43,17 @@ app.post('/open-position', async (req, res) => {
     }
 
     console.log(`\n==================================================`);
-    console.log(`📩 [SIGNAL RECEIVED] Request to open DLMM position for Mint: ${mint}`);
+    console.log(`📩 [SIGNAL RECEIVED] Request to open DLMM position for Signal: ${targetSignal}`);
     if (rawAlert) {
       console.log(`Raw Alert Preview: ${rawAlert.slice(0, 100)}...`);
     }
     console.log(`==================================================\n`);
 
-    // DEDUP CHECK: Cegah pembukaan posisi ganda untuk mint token yang sama yang masih ACTIVE
+    // DEDUP CHECK: Cegah pembukaan posisi ganda untuk query/mint token yang sama yang masih ACTIVE
     const activePositions = dbService.getActivePositions();
-    const existingPos = activePositions.find(p => p.mint === mint);
+    const existingPos = activePositions.find(p => (p.query && p.query.toUpperCase() === targetSignal.toUpperCase()) || p.mint === targetSignal);
     if (existingPos) {
-      console.log(`⚠️ [DUPLICATE IGNORED] Posisi untuk mint ${mint} sudah aktif (ID: ${existingPos.id}). Mengabaikan alert duplikat.`);
+      console.log(`⚠️ [DUPLICATE IGNORED] Posisi untuk signal ${targetSignal} sudah aktif (ID: ${existingPos.id}). Mengabaikan alert duplikat.`);
       return res.status(200).json({
         success: true,
         message: 'Posisi untuk token ini sudah aktif, mengabaikan alert duplikat.',
@@ -61,7 +62,7 @@ app.post('/open-position', async (req, res) => {
       });
     }
 
-    const positionRecord = await dlmmService.executeOpenPosition(mint);
+    const positionRecord = await dlmmService.executeOpenPosition(targetSignal);
     dbService.addPosition(positionRecord);
 
     console.log(`🎉 [POSITION CREATED] Saved to database! ID: ${positionRecord.id} | Status: ACTIVE`);

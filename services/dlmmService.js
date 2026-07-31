@@ -30,11 +30,11 @@ function getSolanaConnectionAndWallet() {
 }
 
 /**
- * Hardcoded Pool Selector:
+ * Hardcoded Pool Selector (Mendukung query Mint CA atau Pair Name seperti LUNA-SOL):
  * Query ke API Meteora -> Filter Pair SOL -> Filter Bin Step 80-125 -> Sort TVL Tertinggi.
  */
-async function fetchAndFilterPool(targetMint) {
-  const apiUrl = `https://dlmm.datapi.meteora.ag/pools?query=${targetMint}`;
+async function fetchAndFilterPool(targetQuery) {
+  const apiUrl = `https://dlmm.datapi.meteora.ag/pools?query=${targetQuery}`;
   console.log(`[DLMM Service] Fetching pools from Meteora API: ${apiUrl}`);
 
   const resp = await fetch(apiUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -46,19 +46,15 @@ async function fetchAndFilterPool(targetMint) {
   const pools = data.data || [];
 
   if (pools.length === 0) {
-    throw new Error(`Tidak ditemukan pool Meteora DLMM untuk Mint: ${targetMint}`);
+    throw new Error(`Tidak ditemukan pool Meteora DLMM untuk query: ${targetQuery}`);
   }
 
-  // Filter Aturan Hardcoded (Strict Target Mint + SOL Pair verification)
+  // Filter Aturan Hardcoded (Wajib Berpasangan dengan SOL & Bin Step 80-125)
   const eligiblePools = pools.filter(p => {
-    const isTargetTokenX = p.token_x && p.token_x.address === targetMint;
-    const isTargetTokenY = p.token_y && p.token_y.address === targetMint;
-    
-    const isSolTokenX = p.token_x && p.token_x.address === SOL_MINT;
-    const isSolTokenY = p.token_y && p.token_y.address === SOL_MINT;
+    const isSolTokenX = p.token_x && p.token_x.address === SOL_MINT && p.token_x.symbol === 'SOL';
+    const isSolTokenY = p.token_y && p.token_y.address === SOL_MINT && p.token_y.symbol === 'SOL';
 
-    // Wajib memasangkan targetMint LANGSUNG dengan SOL (Token X = Target & Token Y = SOL, atau sebaliknya)
-    const isSolPair = (isTargetTokenX && isSolTokenY) || (isTargetTokenY && isSolTokenX);
+    const isSolPair = isSolTokenX || isSolTokenY;
 
     const binStep = p.pool_config ? p.pool_config.bin_step : 0;
     const isBinStepValid = binStep >= 80 && binStep <= 125;
@@ -67,15 +63,18 @@ async function fetchAndFilterPool(targetMint) {
   });
 
   if (eligiblePools.length === 0) {
-    throw new Error(`Tidak ditemukan pool yang memenuhi kriteria (Pair HANYA Token/SOL & Bin Step 80-125) untuk Mint: ${targetMint}`);
+    throw new Error(`Tidak ditemukan pool yang memenuhi kriteria (Pair SOL & Bin Step 80-125) untuk query: ${targetQuery}`);
   }
 
   // Sort TVL Tertinggi
   eligiblePools.sort((a, b) => (b.tvl || 0) - (a.tvl || 0));
   const selectedPool = eligiblePools[0];
 
-  console.log(`[DLMM Service] ✅ Selected Pool: ${selectedPool.name} (${selectedPool.address}) | Bin Step: ${selectedPool.pool_config.bin_step} | TVL: $${selectedPool.tvl}`);
-  return selectedPool;
+  // Ekstrak Mint CA Token Target (Token non-SOL)
+  const targetMint = selectedPool.token_x.address === SOL_MINT ? selectedPool.token_y.address : selectedPool.token_x.address;
+
+  console.log(`[DLMM Service] ✅ Selected Pool: ${selectedPool.name} (${selectedPool.address}) | Derived Mint: ${targetMint} | Bin Step: ${selectedPool.pool_config.bin_step} | TVL: $${selectedPool.tvl}`);
+  return { selectedPool, targetMint };
 }
 
 /**
@@ -160,7 +159,7 @@ function getNormalizedTokenPrice(poolInfo, rawPrice) {
 /**
  * 2-Step Zap In & Deposition Posisi DLMM Double Side.
  */
-async function executeOpenPosition(targetMint) {
+async function executeOpenPosition(targetQuery) {
   const isDryRun = process.env.DRY_RUN === 'true';
   const solAmount = parseFloat(process.env.DEFAULT_SOL_AMOUNT || '0.1');
   const strategyStr = process.env.STRATEGY_TYPE || 'BidAsk';
@@ -169,8 +168,8 @@ async function executeOpenPosition(targetMint) {
   const tpPct = parseFloat(process.env.TAKE_PROFIT_PERCENT || '20');
   const slPct = parseFloat(process.env.STOP_LOSS_PERCENT || '10');
 
-  // 1. Hardcoded Pool Selection
-  const poolInfo = await fetchAndFilterPool(targetMint);
+  // 1. Hardcoded Pool Selection (Derive Pool & Mint CA)
+  const { selectedPool: poolInfo, targetMint } = await fetchAndFilterPool(targetQuery);
 
   if (isDryRun) {
     console.log(`[DRY_RUN] 🧪 Mode Simulasi Aktif. Tidak mengirim transaksi ke mainnet.`);
@@ -179,6 +178,7 @@ async function executeOpenPosition(targetMint) {
 
     const mockPosition = {
       id: `pos_${Date.now()}`,
+      query: targetQuery,
       mint: targetMint,
       poolAddress: poolInfo.address,
       poolName: poolInfo.name,
@@ -243,6 +243,7 @@ async function executeOpenPosition(targetMint) {
   const entryPrice = getNormalizedTokenPrice(poolInfo, activeBin.price);
   const positionRecord = {
     id: `pos_${Date.now()}`,
+    query: targetQuery,
     mint: targetMint,
     poolAddress: poolInfo.address,
     poolName: poolInfo.name,
