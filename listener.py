@@ -40,7 +40,7 @@ target_filter_chat = int(TARGET_BOT) if TARGET_BOT.lstrip("-").isdigit() else TA
 # Regex pattern untuk Solana Mint Address (Base58 32-44 karakter)
 SOLANA_CA_REGEX = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
 
-# Regex pattern untuk Pair Name (misal: LUNA-SOL, Fauci-SOL, ChooChoo-SOL)
+# Regex pattern untuk Pair Name (misal: S-SOL, LUNA-SOL, Fauci-SOL, SHORTCAT-SOL)
 PAIR_NAME_REGEX = re.compile(r"\b([A-Za-z0-9_]+-SOL)\b", re.IGNORECASE)
 
 # Inisialisasi Pyrogram Client
@@ -51,23 +51,56 @@ app = Client(
 )
 
 
-def extract_target_query(text: str) -> str | None:
+def extract_all_text_from_message(message) -> str:
     """
-    Ekstrak Solana Contract Address (CA) atau Pair Name (misal LUNA-SOL) dari teks alert.
+    Ekstrak seluruh teks dan data entitas dari template pesan Telegram (Rich Table, Copy Text, Expandable Blockquote, Inline Button, dsb).
     """
-    if not text:
+    texts = []
+
+    # 1. Teks Utama & Caption
+    if message.text:
+        texts.append(message.text)
+    if message.caption:
+        texts.append(message.caption)
+
+    # 2. Entitas Teks (Link, Spoiler, Expandable Blockquote, Copy Text)
+    entities = (getattr(message, "entities", None) or []) + (getattr(message, "caption_entities", None) or [])
+    for ent in entities:
+        if hasattr(ent, "url") and ent.url:
+            texts.append(ent.url)
+
+    # 3. Inline Keyboard Buttons (Tombol 'Open pool on Meteora' & 'Mint CA · tap to copy')
+    if getattr(message, "reply_markup", None) and hasattr(message.reply_markup, "inline_keyboard"):
+        for row in message.reply_markup.inline_keyboard:
+            for btn in row:
+                if hasattr(btn, "url") and btn.url:
+                    texts.append(btn.url)
+                if hasattr(btn, "text") and btn.text:
+                    texts.append(btn.text)
+                if hasattr(btn, "copy_text") and btn.copy_text and hasattr(btn.copy_text, "text"):
+                    texts.append(btn.copy_text.text)
+
+    return "\n".join(texts)
+
+
+def extract_target_query(message) -> str | None:
+    """
+    Ekstrak Solana Contract Address (CA) atau Pair Name (misal: S-SOL, LUNA-SOL) dari template pesan alert Gambar 1.
+    """
+    full_text = extract_all_text_from_message(message)
+    if not full_text:
         return None
 
-    # 1. Coba ekstrak Solana Mint Address (Base58) jika ada
-    ca_matches = SOLANA_CA_REGEX.findall(text)
+    # 1. Coba ekstrak Solana Mint Address (Base58) dari seluruh isi teks & entitas
+    ca_matches = SOLANA_CA_REGEX.findall(full_text)
     for match in ca_matches:
         if len(match) >= 32 and len(match) <= 44:
-            if match in ["Discovery", "Supertrend", "Meteora", "Bullish", "Bearish"]:
+            if match in ["Discovery", "Supertrend", "Meteora", "Bullish", "Bearish", "Value", "Metric"]:
                 continue
             return match
 
-    # 2. Jika tidak ada CA polos, ekstrak Pair Name (misal: LUNA-SOL atau Fauci-SOL)
-    pair_matches = PAIR_NAME_REGEX.findall(text)
+    # 2. Jika tidak ada CA polos/entitas, ekstrak Pair Name (misal: S-SOL, LUNA-SOL, Fauci-SOL)
+    pair_matches = PAIR_NAME_REGEX.findall(full_text)
     if pair_matches:
         return pair_matches[0].upper()
 
@@ -105,20 +138,20 @@ async def handle_target_alert(client: Client, message):
     Handler dipanggil ketika ada pesan alert masuk dari bot target.
     """
     recv_time = datetime.now()
-    text = message.text or message.caption or ""
+    raw_text = message.text or message.caption or ""
     sender_name = message.from_user.username if message.from_user and message.from_user.username else str(message.chat.id)
 
     logger.info(f"⚡ [ALERT DITERIMA] [{recv_time.strftime('%H:%M:%S.%f')[:-3]}] dari @{sender_name}")
     print("=" * 60)
-    print(text)
+    print(raw_text)
     print("=" * 60)
 
-    target_query = extract_target_query(text)
+    target_query = extract_target_query(message)
     if target_query:
-        logger.info(f"🎯 [SIGNAL EXTACTED] Target Query: {target_query}")
-        forward_signal_to_manager(target_query, text)
+        logger.info(f"🎯 [SIGNAL EXTRACTED] Target Query: {target_query}")
+        forward_signal_to_manager(target_query, raw_text)
     else:
-        logger.warning("⚠️ Tidak ditemukan Solana Mint CA maupun Pair Name pada pesan alert ini.")
+        logger.warning("⚠️ Tidak ditemukan Solana Mint CA maupun Pair Name pada template pesan alert ini.")
 
 
 if __name__ == "__main__":
