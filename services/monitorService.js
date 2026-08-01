@@ -100,10 +100,18 @@ async function checkPositions() {
 
 /**
  * Memulai background loop pemantau TP/SL/Trailing Stop 24/7.
+ * Melakukan On-Chain Auto-Sync terlebih dahulu saat startup di Live Mainnet Mode.
  */
-function startMonitoring() {
+async function startMonitoring() {
   const intervalMs = parseInt(process.env.MONITOR_INTERVAL_MS || '3000', 10);
   console.log(`[Monitor Service] 🚀 Starting 24/7 TP/SL & Trailing Stop Monitor Loop every ${intervalMs / 1000} seconds...`);
+
+  // Lakukan On-Chain Auto-Sync posisi saat startup di Mode Live
+  try {
+    await dlmmService.syncOnChainPositions();
+  } catch (syncErr) {
+    console.warn('[Monitor Service] On-Chain position sync warning:', syncErr.message);
+  }
 
   if (monitorTimer) clearInterval(monitorTimer);
   monitorTimer = setInterval(checkPositions, intervalMs);

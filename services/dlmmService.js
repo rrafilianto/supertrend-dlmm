@@ -3,6 +3,7 @@ const DLMM = require('@meteora-ag/dlmm').default || require('@meteora-ag/dlmm');
 const { StrategyType } = require('@meteora-ag/dlmm');
 const bs58 = require('bs58').default || require('bs58');
 const fetch = require('node-fetch');
+const dbService = require('./dbService');
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
@@ -327,9 +328,80 @@ async function executeClosePosition(positionRecord, reason = 'MANUAL') {
   return { success: true, reason, removeTxHash, swapBackTxHash, closeTxHash };
 }
 
+/**
+ * On-Chain Position Auto-Sync (Hanya berjalan di Live Mainnet Mode):
+ * Mendeteksi posisi yang sedang aktif On-Chain di Solana Mainnet via DLMM.getAllLbPairPositionsByUser
+ */
+async function syncOnChainPositions() {
+  if (process.env.DRY_RUN === 'true') {
+    console.log('[On-Chain Sync] DRY_RUN mode active. Skipping on-chain position sync.');
+    return 0;
+  }
+
+  try {
+    console.log('[On-Chain Sync] 🔄 Checking On-Chain open positions from Solana Mainnet...');
+    const { connection, wallet } = getSolanaConnectionAndWallet();
+    const positionsMap = await DLMM.getAllLbPairPositionsByUser(connection, wallet.publicKey);
+
+    const activeDbPositions = dbService.getActivePositions();
+    let syncedCount = 0;
+
+    for (const [poolAddress, pairObj] of positionsMap.entries()) {
+      const userPositions = pairObj.userPositions || [];
+      for (const pos of userPositions) {
+        const posPubKey = pos.publicKey.toBase58();
+        const existingInDb = activeDbPositions.find(p => p.positionPubKey === posPubKey);
+
+        if (!existingInDb) {
+          console.log(`[On-Chain Sync] 🚀 Found untracked On-Chain Position: ${posPubKey} for Pool: ${poolAddress}. Syncing to DB...`);
+
+          const dlmmPool = await DLMM.create(connection, new PublicKey(poolAddress));
+          const activeBin = await dlmmPool.getActiveBin();
+          const isTokenX = dlmmPool.tokenX.publicKey.toBase58() === SOL_MINT;
+          const targetMint = isTokenX ? dlmmPool.tokenY.publicKey.toBase58() : dlmmPool.tokenX.publicKey.toBase58();
+          const entryPrice = isTokenX ? 1 / activeBin.price : activeBin.price;
+
+          const tpPct = parseFloat(process.env.TAKE_PROFIT_PERCENT || '20');
+          const slPct = parseFloat(process.env.STOP_LOSS_PERCENT || '10');
+
+          const newPosRecord = {
+            id: `pos_synced_${Date.now()}`,
+            query: targetMint,
+            mint: targetMint,
+            poolAddress: poolAddress,
+            poolName: `${dlmmPool.tokenX.reserve.slice(0, 4)}-${dlmmPool.tokenY.reserve.slice(0, 4)}`,
+            positionPubKey: posPubKey,
+            entryPrice,
+            tpPrice: entryPrice * (1 + tpPct / 100),
+            slPrice: entryPrice * (1 - slPct / 100),
+            strategy: process.env.STRATEGY_TYPE || 'BidAsk',
+            binBelow: parseInt(process.env.BIN_BELOW || '15', 10),
+            binAbove: parseInt(process.env.BIN_ABOVE || '15', 10),
+            solAmount: parseFloat(process.env.DEFAULT_SOL_AMOUNT || '0.1'),
+            status: 'ACTIVE',
+            createdAt: new Date().toISOString(),
+            isDryRun: false,
+            syncedFromChain: true
+          };
+
+          dbService.addPosition(newPosRecord);
+          syncedCount++;
+        }
+      }
+    }
+
+    console.log(`[On-Chain Sync] ✅ Sync completed. ${syncedCount} new position(s) recovered from Solana Mainnet.`);
+    return syncedCount;
+  } catch (err) {
+    console.error('[On-Chain Sync] Error syncing on-chain positions:', err.message);
+    return 0;
+  }
+}
+
 module.exports = {
   fetchAndFilterPool,
   executeOpenPosition,
   executeClosePosition,
   getNormalizedTokenPrice,
+  syncOnChainPositions,
 };
