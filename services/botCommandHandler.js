@@ -176,9 +176,9 @@ async function handleActivePositionsCmd() {
     text += `<b>${idx + 1}. ${pos.poolName || pos.mint}</b>\n`;
     text += `• Mint: <code>${pos.mint}</code>\n`;
     text += `• Entry Price: $${(pos.entryPrice || 0).toFixed(8)}\n`;
-    text += `• Peak PnL: +${maxPnl.toFixed(2)}%\n`;
-    text += `• Target TP: $${(pos.tpPrice || 0).toFixed(8)} (+${process.env.TAKE_PROFIT_PERCENT || 20}%)\n`;
-    text += `• Target SL: $${(pos.slPrice || 0).toFixed(8)} (-${process.env.STOP_LOSS_PERCENT || 10}%)\n`;
+    text += `• Peak True PnL: +${maxPnl.toFixed(2)}%\n`;
+    text += `• Target TP: +${process.env.TAKE_PROFIT_PERCENT || 20}%\n`;
+    text += `• Target SL: -${process.env.STOP_LOSS_PERCENT || 10}%\n`;
     text += `• Opened At: ${new Date(pos.createdAt).toLocaleString()}\n`;
     text += `----------------------------------\n`;
   }
@@ -208,10 +208,12 @@ async function handleHistoryCmd() {
     const pnlPct = details.pnlPct || 0;
     const pnlSign = pnlPct >= 0 ? '+' : '';
     const statusEmoji = pnlPct >= 0 ? '🟢' : '🔴';
+    const feeSol = details.unclaimedFeeSol || 0;
 
     text += `<b>${idx + 1}. ${statusEmoji} ${pos.poolName || pos.mint}</b>\n`;
     text += `• Status: <code>${pos.status}</code>\n`;
-    text += `• PnL Akhir: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> (Peak: +${(details.maxPnlPct || 0).toFixed(2)}%)\n`;
+    text += `• True PnL Akhir: <b>${pnlSign}${pnlPct.toFixed(2)}%</b> (Peak: +${(details.maxPnlPct || 0).toFixed(2)}%)\n`;
+    text += `• Fees Earned: <b>+${feeSol.toFixed(4)} SOL</b>\n`;
     text += `• Entry: $${(pos.entryPrice || 0).toFixed(8)} ➔ Exit: $${(details.currentPrice || 0).toFixed(8)}\n`;
     text += `• Closed At: ${pos.closedAt ? new Date(pos.closedAt).toLocaleString() : 'N/A'}\n`;
     text += `----------------------------------\n`;

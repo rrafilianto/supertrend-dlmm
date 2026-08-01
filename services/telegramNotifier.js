@@ -87,6 +87,7 @@ async function notifyPositionClosed(pos, reason, closeDetails = {}) {
   const currentPrice = closeDetails.currentPrice || 0;
   const pnlPct = closeDetails.pnlPct || 0;
   const maxPnlPct = closeDetails.maxPnlPct || pnlPct;
+  const unclaimedFeeSol = closeDetails.unclaimedFeeSol || 0;
 
   let reasonHeader = 'ℹ️ <b>[POSITION CLOSED]</b>';
   let badgeText = reason;
@@ -115,7 +116,8 @@ ${reasonHeader}
 
 <b>Entry Price:</b> $${(pos.entryPrice || 0).toFixed(8)}
 <b>Exit Price:</b> $${currentPrice.toFixed(8)}
-<b>Final PnL:</b> <b>${pnlSign}${pnlPct.toFixed(2)}%</b> (Peak: +${maxPnlPct.toFixed(2)}%)
+<b>True PnL Akhir:</b> <b>${pnlSign}${pnlPct.toFixed(2)}%</b> (Peak: +${maxPnlPct.toFixed(2)}%)
+<b>Swap Fees Earned:</b> <b>+${unclaimedFeeSol.toFixed(4)} SOL</b>
 
 Mode: ${modeText}
   `.trim();

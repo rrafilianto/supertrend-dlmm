@@ -31,6 +31,32 @@ function getSolanaConnectionAndWallet() {
 }
 
 /**
+ * Fetch harga USD real-time dari Jupiter Price API (v1 assets/search)
+ */
+async function getJupiterPrices(mints) {
+  const uniqueMints = [...new Set(mints.filter(Boolean))];
+  if (uniqueMints.length === 0) return {};
+
+  try {
+    const url = `https://datapi.jup.ag/v1/assets/search?query=${uniqueMints.join(',')}`;
+    const res = await fetch(url, { headers: { accept: 'application/json', 'User-Agent': 'Mozilla/5.0' } });
+    if (!res.ok) return {};
+
+    const assets = await res.json();
+    const prices = {};
+    for (const a of assets) {
+      if (a.id && a.usdPrice != null) {
+        prices[a.id] = parseFloat(a.usdPrice) || 0;
+      }
+    }
+    return prices;
+  } catch (err) {
+    console.warn('[Jupiter Price] Fetch failed:', err.message);
+    return {};
+  }
+}
+
+/**
  * Hardcoded Pool Selector (Mendukung query Mint CA atau Pair Name seperti LUNA-SOL):
  * Query ke API Meteora -> Filter Pair SOL -> Filter Bin Step 80-125 -> Sort TVL Tertinggi.
  */
@@ -398,10 +424,112 @@ async function syncOnChainPositions() {
   }
 }
 
+/**
+ * Menghitung Single True PnL (%) secara On-Chain (Aset di Bin + FeeX + FeeY) dengan Proteksi pnlPctSuspicious.
+ */
+async function fetchTruePositionPnl(positionRecord) {
+  const isDryRun = positionRecord.isDryRun || process.env.DRY_RUN === 'true';
+
+  // Mode Dry Run: Perhitungan PnL simulasi berdasarkan spot price Meteora API
+  if (isDryRun) {
+    try {
+      const url = `https://dlmm.datapi.meteora.ag/pools?query=${positionRecord.mint}`;
+      const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (resp.ok) {
+        const data = await resp.json();
+        const pools = data.data || [];
+        const pool = pools.find(p => p.address === positionRecord.poolAddress) || pools[0];
+        if (pool && pool.current_price) {
+          const currentPrice = getNormalizedTokenPrice(pool, pool.current_price);
+          const spotPnlPct = ((currentPrice - positionRecord.entryPrice) / positionRecord.entryPrice) * 100;
+          // Simulated fee yield (+0.05% per check)
+          const mockFeeSol = (positionRecord.solAmount || 0.1) * 0.005;
+          const truePnlPct = spotPnlPct + 0.5;
+
+          return {
+            currentPnlPct: truePnlPct,
+            currentPrice,
+            unclaimedFeeSol: mockFeeSol,
+            totalValueSol: (positionRecord.solAmount || 0.1) * (1 + truePnlPct / 100),
+            pnlPctSuspicious: false
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('[DLMM PnL] Dry run price fetch error:', err.message);
+    }
+    return { currentPnlPct: 0, currentPrice: positionRecord.entryPrice, unclaimedFeeSol: 0, totalValueSol: positionRecord.solAmount, pnlPctSuspicious: true };
+  }
+
+  // Live Mainnet Mode: Baca Aset & Unclaimed Fees langsung On-Chain dari Smart Contract Solana
+  try {
+    const { connection, wallet } = getSolanaConnectionAndWallet();
+    const dlmmPool = await DLMM.create(connection, new PublicKey(positionRecord.poolAddress));
+
+    const userPositions = await dlmmPool.getPositionsByUserAndLbPair(wallet.publicKey);
+    const targetPos = userPositions.userPositions.find(p => p.publicKey.toBase58() === positionRecord.positionPubKey);
+
+    if (!targetPos) {
+      console.warn(`[DLMM PnL] On-Chain position ${positionRecord.positionPubKey} not found.`);
+      return { currentPnlPct: 0, currentPrice: positionRecord.entryPrice, unclaimedFeeSol: 0, totalValueSol: positionRecord.solAmount, pnlPctSuspicious: true };
+    }
+
+    const posData = targetPos.positionData || {};
+    const decX = dlmmPool.tokenX.mint.decimals || 9;
+    const decY = dlmmPool.tokenY.mint.decimals || 9;
+    const isTokenXTarget = dlmmPool.tokenX.publicKey.toBase58() === positionRecord.mint;
+
+    // Nilai Mentah Aset On-Chain (xRaw, yRaw) & Fee Swap (feeX, feeY)
+    const xHuman = (parseFloat(posData.totalXAmount || '0')) / Math.pow(10, decX);
+    const yHuman = (parseFloat(posData.totalYAmount || '0')) / Math.pow(10, decY);
+    const feeXHuman = (parseFloat(posData.feeX || '0')) / Math.pow(10, decX);
+    const feeYHuman = (parseFloat(posData.feeY || '0')) / Math.pow(10, decY);
+
+    // Fetch Harga USD Real-Time dari Jupiter Price API
+    const prices = await getJupiterPrices([SOL_MINT, positionRecord.mint]);
+    const solUsd = prices[SOL_MINT] || 0;
+    const targetTokenUsd = prices[positionRecord.mint] || 0;
+
+    // Proteksi Suspicious Tick: Jika Jupiter gagal memberikan harga USD (>0)
+    if (solUsd <= 0 || (isTokenXTarget ? xHuman > 0 || feeXHuman > 0 : yHuman > 0 || feeYHuman > 0) && targetTokenUsd <= 0) {
+      console.warn(`[DLMM PnL] ⚠️ Suspicious tick detected for position ${positionRecord.positionPubKey} (missing prices from Jupiter).`);
+      return { currentPnlPct: 0, currentPrice: positionRecord.entryPrice, unclaimedFeeSol: 0, totalValueSol: positionRecord.solAmount, pnlPctSuspicious: true };
+    }
+
+    const priceX = isTokenXTarget ? targetTokenUsd : solUsd;
+    const priceY = isTokenXTarget ? solUsd : targetTokenUsd;
+
+    // Hitung Total Balances USD & Fee Claimable USD
+    const balancesUsd = (xHuman * priceX) + (yHuman * priceY);
+    const claimableFeesUsd = (feeXHuman * priceX) + (feeYHuman * priceY);
+
+    const unclaimedFeeSol = claimableFeesUsd / solUsd;
+    const totalValueSol = (balancesUsd + claimableFeesUsd) / solUsd;
+
+    const depositSol = positionRecord.solAmount || 0.1;
+    const truePnlPct = depositSol > 0 ? ((totalValueSol - depositSol) / depositSol) * 100 : 0;
+
+    const activeBin = await dlmmPool.getActiveBin();
+    const currentPrice = getNormalizedTokenPrice(dlmmPool, activeBin.price);
+
+    return {
+      currentPnlPct: truePnlPct,
+      currentPrice,
+      unclaimedFeeSol,
+      totalValueSol,
+      pnlPctSuspicious: false
+    };
+  } catch (err) {
+    console.error(`[DLMM PnL] Error calculating True PnL for position ${positionRecord.positionPubKey}:`, err.message);
+    return { currentPnlPct: 0, currentPrice: positionRecord.entryPrice, unclaimedFeeSol: 0, totalValueSol: positionRecord.solAmount, pnlPctSuspicious: true };
+  }
+}
+
 module.exports = {
   fetchAndFilterPool,
   executeOpenPosition,
   executeClosePosition,
   getNormalizedTokenPrice,
   syncOnChainPositions,
+  fetchTruePositionPnl,
 };
