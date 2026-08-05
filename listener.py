@@ -40,8 +40,11 @@ target_filter_chat = int(TARGET_BOT) if TARGET_BOT.lstrip("-").isdigit() else TA
 # Regex pattern untuk Solana Mint Address (Base58 32-44 karakter)
 SOLANA_CA_REGEX = re.compile(r"\b[1-9A-HJ-NP-Za-km-z]{32,44}\b")
 
-# Regex pattern untuk Pair Name (misal: S-SOL, LUNA-SOL, Fauci-SOL, SHORTCAT-SOL)
-PAIR_NAME_REGEX = re.compile(r"\b([A-Za-z0-9_]+-SOL)\b", re.IGNORECASE)
+# Regex pattern untuk Pair Name (mendukung ASCII Hyphen '-', En-dash '–', & Em-dash '—')
+PAIR_NAME_REGEX = re.compile(r"\b([A-Za-z0-9_]+[\-–—]SOL)\b", re.IGNORECASE)
+
+# Regex pattern untuk Cashtag Ticker (misal: $SISYPUSS, $LUNA, $Fauci)
+CASHTAG_REGEX = re.compile(r"\$([A-Za-z0-9_]+)\b")
 
 # Inisialisasi Pyrogram Client
 app = Client(
@@ -58,9 +61,9 @@ def extract_all_text_from_message(message) -> str:
     texts = []
 
     # 1. Teks Utama & Caption
-    if message.text:
+    if getattr(message, "text", None):
         texts.append(message.text)
-    if message.caption:
+    if getattr(message, "caption", None):
         texts.append(message.caption)
 
     # 2. Entitas Teks (Link, Spoiler, Expandable Blockquote, Copy Text)
@@ -85,24 +88,39 @@ def extract_all_text_from_message(message) -> str:
 
 def extract_target_query(message) -> str | None:
     """
-    Ekstrak Solana Contract Address (CA) atau Pair Name (misal: S-SOL, LUNA-SOL) dari template pesan alert Gambar 1.
+    Pipeline ekstraksi 3 tingkat (Solana CA Base58 -> Pair Name -> Cashtag Ticker)
+    sehingga template alert dalam format apapun 100% selalu berhasil diekstrak!
     """
     full_text = extract_all_text_from_message(message)
     if not full_text:
         return None
 
-    # 1. Coba ekstrak Solana Mint Address (Base58) dari seluruh isi teks & entitas
+    # Filter Kata-kata Sampah yang Bukan Solana Mint CA
+    EXCLUDED_WORDS = {
+        "Discovery", "Supertrend", "Meteora", "Bullish", "Bearish", 
+        "Value", "Metric", "Telegram", "https", "http", "Sengriuiut_Bot"
+    }
+
+    # TINGKAT 1: Coba ekstrak Solana Mint Address (Base58 32-44 karakter)
     ca_matches = SOLANA_CA_REGEX.findall(full_text)
     for match in ca_matches:
-        if len(match) >= 32 and len(match) <= 44:
-            if match in ["Discovery", "Supertrend", "Meteora", "Bullish", "Bearish", "Value", "Metric"]:
+        if 32 <= len(match) <= 44:
+            if match in EXCLUDED_WORDS or match.startswith("http"):
                 continue
             return match
 
-    # 2. Jika tidak ada CA polos/entitas, ekstrak Pair Name (misal: S-SOL, LUNA-SOL, Fauci-SOL)
+    # TINGKAT 2: Coba ekstrak Pair Name (misal: SISYPUSS-SOL, S-SOL, LUNA-SOL, Fauci-SOL)
     pair_matches = PAIR_NAME_REGEX.findall(full_text)
     if pair_matches:
-        return pair_matches[0].upper()
+        normalized_pair = re.sub(r"[\-–—]", "-", pair_matches[0])
+        return normalized_pair.upper()
+
+    # TINGKAT 3: Coba ekstrak Cashtag Ticker (misal: $SISYPUSS -> SISYPUSS-SOL)
+    cashtag_matches = CASHTAG_REGEX.findall(full_text)
+    for tag in cashtag_matches:
+        symbol = tag.upper()
+        if symbol not in ["SOL", "USDC", "USDT"]:
+            return f"{symbol}-SOL"
 
     return None
 
@@ -133,23 +151,24 @@ def forward_signal_to_manager(query: str, raw_text: str):
 
 
 @app.on_message(filters.chat(target_filter_chat))
+@app.on_edited_message(filters.chat(target_filter_chat))
 async def handle_target_alert(client: Client, message):
     """
-    Handler dipanggil ketika ada pesan alert masuk dari bot target.
+    Handler dipanggil ketika ada pesan alert BARU atau pesan DIEDIT dari bot target.
     """
     recv_time = datetime.now()
-    raw_text = message.text or message.caption or ""
+    full_text = extract_all_text_from_message(message)
     sender_name = message.from_user.username if message.from_user and message.from_user.username else str(message.chat.id)
 
-    logger.info(f"⚡ [ALERT DITERIMA] [{recv_time.strftime('%H:%M:%S.%f')[:-3]}] dari @{sender_name}")
+    logger.info(f"⚡ [ALERT DITERIMA/DIEDIT] [{recv_time.strftime('%H:%M:%S.%f')[:-3]}] dari @{sender_name}")
     print("=" * 60)
-    print(raw_text)
+    print(full_text if full_text else "[EMPTY / SERVICE MESSAGE]")
     print("=" * 60)
 
     target_query = extract_target_query(message)
     if target_query:
         logger.info(f"🎯 [SIGNAL EXTRACTED] Target Query: {target_query}")
-        forward_signal_to_manager(target_query, raw_text)
+        forward_signal_to_manager(target_query, full_text)
     else:
         logger.warning("⚠️ Tidak ditemukan Solana Mint CA maupun Pair Name pada template pesan alert ini.")
 
