@@ -433,32 +433,58 @@ async function fetchTruePositionPnl(positionRecord) {
   // Mode Dry Run: Perhitungan PnL simulasi berdasarkan spot price Meteora API
   if (isDryRun) {
     try {
-      const url = `https://dlmm.datapi.meteora.ag/pools?query=${positionRecord.mint}`;
-      const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      // Coba query berdasarkan Mint CA dulu, jika kosong coba query berdasarkan poolAddress / query
+      let url = `https://dlmm.datapi.meteora.ag/pools?query=${positionRecord.mint}`;
+      let resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      let pools = [];
       if (resp.ok) {
         const data = await resp.json();
-        const pools = data.data || [];
-        const pool = pools.find(p => p.address === positionRecord.poolAddress) || pools[0];
-        if (pool && pool.current_price) {
-          const currentPrice = getNormalizedTokenPrice(pool, pool.current_price);
-          const spotPnlPct = ((currentPrice - positionRecord.entryPrice) / positionRecord.entryPrice) * 100;
-          // Simulated fee yield (+0.05% per check)
-          const mockFeeSol = (positionRecord.solAmount || 0.1) * 0.005;
-          const truePnlPct = spotPnlPct + 0.5;
+        pools = data.data || [];
+      }
 
-          return {
-            currentPnlPct: truePnlPct,
-            currentPrice,
-            unclaimedFeeSol: mockFeeSol,
-            totalValueSol: (positionRecord.solAmount || 0.1) * (1 + truePnlPct / 100),
-            pnlPctSuspicious: false
-          };
+      if (pools.length === 0 && positionRecord.poolAddress) {
+        url = `https://dlmm.datapi.meteora.ag/pools?query=${positionRecord.poolAddress}`;
+        resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (resp.ok) {
+          const data = await resp.json();
+          pools = data.data || [];
         }
       }
+
+      if (pools.length === 0 && positionRecord.query) {
+        url = `https://dlmm.datapi.meteora.ag/pools?query=${positionRecord.query}`;
+        resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (resp.ok) {
+          const data = await resp.json();
+          pools = data.data || [];
+        }
+      }
+
+      const pool = pools.find(p => p.address === positionRecord.poolAddress) || pools[0];
+      const rawPrice = pool && pool.current_price ? pool.current_price : 0;
+      const currentPrice = rawPrice > 0 ? getNormalizedTokenPrice(pool, rawPrice) : positionRecord.entryPrice;
+
+      const spotPnlPct = ((currentPrice - positionRecord.entryPrice) / positionRecord.entryPrice) * 100;
+      const mockFeeSol = (positionRecord.solAmount || 0.1) * 0.005;
+      const truePnlPct = spotPnlPct + 0.5;
+
+      return {
+        currentPnlPct: truePnlPct,
+        currentPrice,
+        unclaimedFeeSol: mockFeeSol,
+        totalValueSol: (positionRecord.solAmount || 0.1) * (1 + truePnlPct / 100),
+        pnlPctSuspicious: false
+      };
     } catch (err) {
       console.warn('[DLMM PnL] Dry run price fetch error:', err.message);
     }
-    return { currentPnlPct: 0, currentPrice: positionRecord.entryPrice, unclaimedFeeSol: 0, totalValueSol: positionRecord.solAmount, pnlPctSuspicious: true };
+    return {
+      currentPnlPct: 0,
+      currentPrice: positionRecord.entryPrice,
+      unclaimedFeeSol: 0,
+      totalValueSol: positionRecord.solAmount,
+      pnlPctSuspicious: false
+    };
   }
 
   // Live Mainnet Mode: Baca Aset & Unclaimed Fees langsung On-Chain dari Smart Contract Solana
@@ -491,7 +517,7 @@ async function fetchTruePositionPnl(positionRecord) {
     const targetTokenUsd = prices[positionRecord.mint] || 0;
 
     // Proteksi Suspicious Tick: Jika Jupiter gagal memberikan harga USD (>0)
-    if (solUsd <= 0 || (isTokenXTarget ? xHuman > 0 || feeXHuman > 0 : yHuman > 0 || feeYHuman > 0) && targetTokenUsd <= 0) {
+    if (solUsd <= 0 || ((isTokenXTarget ? xHuman > 0 || feeXHuman > 0 : yHuman > 0 || feeYHuman > 0) && targetTokenUsd <= 0)) {
       console.warn(`[DLMM PnL] ⚠️ Suspicious tick detected for position ${positionRecord.positionPubKey} (missing prices from Jupiter).`);
       return { currentPnlPct: 0, currentPrice: positionRecord.entryPrice, unclaimedFeeSol: 0, totalValueSol: positionRecord.solAmount, pnlPctSuspicious: true };
     }

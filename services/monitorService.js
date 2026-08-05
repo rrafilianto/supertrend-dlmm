@@ -62,17 +62,21 @@ async function checkPositions() {
 
     for (const pos of activePositions) {
       const pnlInfo = await dlmmService.fetchTruePositionPnl(pos);
-
-      // 🛡️ Proteksi Suspicious Tick: Abaikan evaluasi jika harga Jupiter/RPC missing/zero
-      if (pnlInfo.pnlPctSuspicious) {
-        console.warn(`[Monitor] ⚠️ Position ${pos.id} suspicious tick (missing prices/RPC error). Skipping exit evaluation to prevent false triggers.`);
-        continue;
-      }
-
-      const currentPrice = pnlInfo.currentPrice;
-      const currentPnlPct = pnlInfo.currentPnlPct; // Single True PnL % (Termasuk FeeX & FeeY)
+      const currentPrice = pnlInfo.currentPrice || pos.entryPrice || 0;
+      const currentPnlPct = pnlInfo.currentPnlPct || 0; // Single True PnL % (Termasuk FeeX & FeeY)
       const unclaimedFeeSol = pnlInfo.unclaimedFeeSol || 0;
       let maxPnlPct = pos.maxPnlPct || 0;
+
+      const pnlSign = currentPnlPct >= 0 ? '+' : '';
+      const suspiciousNotice = pnlInfo.pnlPctSuspicious ? ' ⚠️ [Data Harga Lag - TP/SL Skipped]' : '';
+
+      // 📝 Cetak log monitor untuk SETIAP posisi aktif (tanpa dilewati)
+      console.log(`[Monitor] Pos ID: ${pos.id} | Mint: ${pos.mint} | Price: $${currentPrice.toFixed(8)} | PnL: ${pnlSign}${currentPnlPct.toFixed(2)}% (Fees: +${unclaimedFeeSol.toFixed(4)} SOL) (Peak: +${maxPnlPct.toFixed(2)}%) | TP: +${process.env.TAKE_PROFIT_PERCENT || 20}% | SL: -${process.env.STOP_LOSS_PERCENT || 10}%${suspiciousNotice}`);
+
+      // 🛡️ Proteksi Suspicious Tick: Jangan eksekusi TP/SL jika harga mencurigakan/lag
+      if (pnlInfo.pnlPctSuspicious) {
+        continue;
+      }
 
       // 🛡️ Konfirmasi 2-Tick Peak PnL sebelum menaikkan peak di database
       if (confirmPeak(pos.id, currentPnlPct, 2)) {
@@ -82,9 +86,6 @@ async function checkPositions() {
         dbService.updatePositionPeak(pos.id, currentPrice, maxPnlPct);
         console.log(`[Monitor] 🚀 Confirmed New Peak PnL for ${pos.id}: +${maxPnlPct.toFixed(2)}%`);
       }
-
-      const pnlSign = currentPnlPct >= 0 ? '+' : '';
-      console.log(`[Monitor] Pos ID: ${pos.id} | Mint: ${pos.mint} | Price: $${currentPrice.toFixed(8)} | PnL: ${pnlSign}${currentPnlPct.toFixed(2)}% (Fees: +${unclaimedFeeSol.toFixed(4)} SOL) (Peak: +${maxPnlPct.toFixed(2)}%) | TP: +${process.env.TAKE_PROFIT_PERCENT || 20}% | SL: -${process.env.STOP_LOSS_PERCENT || 10}%`);
 
       // 1. Check Hard Take Profit (+20%) via Single True PnL %
       if (currentPnlPct >= (pos.tpPct || parseFloat(process.env.TAKE_PROFIT_PERCENT || '20'))) {
