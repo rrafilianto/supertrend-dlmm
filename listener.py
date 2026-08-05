@@ -155,14 +155,20 @@ def forward_signal_to_manager(query: str, raw_text: str):
 async def handle_target_alert(client: Client, message):
     """
     Handler dipanggil ketika ada pesan alert BARU atau pesan DIEDIT dari bot target.
+    HANYA memproses pesan yang mengandung teks "Bonus Stage".
     """
     recv_time = datetime.now()
     full_text = extract_all_text_from_message(message)
+
+    # 🛡️ FILTER KETAT: Hanya proses jika isi pesan mengandung kata "Bonus Stage"
+    if "bonus stage" not in full_text.lower():
+        return
+
     sender_name = message.from_user.username if message.from_user and message.from_user.username else str(message.chat.id)
 
-    logger.info(f"⚡ [ALERT DITERIMA/DIEDIT] [{recv_time.strftime('%H:%M:%S.%f')[:-3]}] dari @{sender_name}")
+    logger.info(f"⚡ [BONUS STAGE ALERT DITERIMA/DIEDIT] [{recv_time.strftime('%H:%M:%S.%f')[:-3]}] dari @{sender_name}")
     print("=" * 60)
-    print(full_text if full_text else "[EMPTY / SERVICE MESSAGE]")
+    print(full_text)
     print("=" * 60)
 
     target_query = extract_target_query(message)
